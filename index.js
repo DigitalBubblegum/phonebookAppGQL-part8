@@ -1,11 +1,13 @@
-const {v1: uuid} = require('uuid')
+const jwt = require('jsonwebtoken')
 const {ApolloServer} = require('@apollo/server')
 const {startStandaloneServer} = require('@apollo/server/standalone')
 const { GraphQLError } = require('graphql')
+
 const mongoose = require('mongoose')
 mongoose.set('strictQuery', false)
 
 const Person = require('./models/person')
+const User = require('./models/users')
 require('dotenv').config()
 const MONGODB_URI = process.env.MONGODB_URI
 console.log('connecting to', MONGODB_URI)
@@ -105,6 +107,9 @@ const resolvers = {
     return Person.find({ phone: { $exists: args.phone === 'YES' } })
     },
     findPerson: async (root, args) => Person.findOne({ name: args.name }),
+    me: (root, args, context) => {
+    return context.currentUser
+  }
   },
 
   Person: {
@@ -149,6 +154,34 @@ const resolvers = {
       }
       return person
     },
+    createUser: async(root,args) => {
+      const user = new User({username: args.username})
+      console.log('new user',user)
+      return user.save().catch(error =>{
+        throw new GraphQLError('creating user failed',{
+          extensions: {
+            code: 'BAD_USER_INPUT',
+            invalidArgs: args.username,
+            error
+          }
+        })
+      })
+    },
+    login: async(root,args) => {
+      const user = await User.findOne({username: args.username})
+      if(!user || args.password !== 'secret'){
+        throw new GraphQLError('wrong credentials',{
+          extensions: {
+            code: 'BAD_USER_INPUT'
+          }
+        })
+      }
+      const userForToken = {
+        username: user.username,
+        id: user._id,
+      }
+      return { value: jwt.sign(userForToken,process.env.JWT_SECRET)}
+    },
   }
 }
 
@@ -158,6 +191,20 @@ const server = new ApolloServer({
 })
 
 startStandaloneServer(server, {
-  listen: { port: 4000 },}).then(({ url }) => {
-  console.log(`Server ready at ${url}`)
-})
+  listen: { port: 4000 },
+  context: async ({ req, res }) => {
+    const auth = req ? req.headers.authorization : null;
+    if (auth && auth.startsWith("Bearer ")) {
+      const decodedToken = jwt.verify(
+        auth.substring(7),
+        process.env.JWT_SECRET
+      );
+      const currentUser = await User.findById(decodedToken.id).populate(
+        "friends"
+      );
+      return { currentUser };
+    }
+  },
+}).then(({ url }) => {
+  console.log(`Server ready at ${url}`);
+});
