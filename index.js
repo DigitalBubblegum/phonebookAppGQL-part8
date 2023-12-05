@@ -59,10 +59,21 @@ enum YesNo {
   NO
 }
 
+type User {
+  username: String!
+  friends: [Person!]!
+  id: ID!
+}
+
+type Token {
+  value: String!
+}
+
 type Query {
   personCount: Int!
   allPersons(phone: YesNo): [Person!]!
   findPerson(name: String!): Person
+  me: User
 }
 type Mutation {
   addPerson(
@@ -75,6 +86,13 @@ type Mutation {
     name: String!
     phone: String!
   ): Person
+  createUser(
+    username: String!
+  ): User
+  login(
+    username: String!
+    password: String!
+  ): Token
 }
 `
 const resolvers = {
@@ -98,15 +116,39 @@ const resolvers = {
     }
   },
   Mutation: {
-    addPerson: async (root, args) => {
+    addPerson: async (root, args, context) => {
       const person = new Person({ ...args })
-      return person.save()
+      try {
+        await person.save()
+        currentUser.friends = currentUser.friends.concat(person)
+        await currentUser.save()
+      } catch (error) {
+        throw new GraphQLError('Saving person failed', {
+          extensions: {
+            code: 'BAD_USER_INPUT',
+            invalidArgs: args.name,
+            error
+          }
+        })
+      }
+      return person
     },
     editNumber: async (root, args) => {
       const person = await Person.findOne({ name: args.name })
       person.phone = args.phone
-      return person.save()
-    }
+      try {
+        await person.save()
+      } catch (error) {
+        throw new GraphQLError('Saving number failed', {
+          extensions: {
+            code: 'BAD_USER_INPUT',
+            invalidArgs: args.name,
+            error
+          }
+        })
+      }
+      return person
+    },
   }
 }
 
@@ -116,7 +158,6 @@ const server = new ApolloServer({
 })
 
 startStandaloneServer(server, {
-  listen: { port: 4000 },
-}).then(({ url }) => {
+  listen: { port: 4000 },}).then(({ url }) => {
   console.log(`Server ready at ${url}`)
 })
